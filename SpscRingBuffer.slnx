@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="SpscRingBuffer.Tests/SpscRingBuffer.Tests.csproj" />
+  <Project Path="SpscRingBuffer/SpscRingBuffer.csproj" />
+</Solution>
