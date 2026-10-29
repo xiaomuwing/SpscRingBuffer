@@ -4,18 +4,19 @@
 用于采集线程与处理线程之间的短时削峰和数据交接。
 
 命名空间：`EdgeCompute.Infrastructure.Buffers`。类库无第三方依赖；正常读写使用数组和 Span，
-不由缓冲区自身分配内存。支持任意正容量、单点/批量读写、整批写入、精确读取、Peek、主动丢弃和统计。
+不由缓冲区自身分配内存。支持任意正容量、单点/批量读写、整批写入、精确读取、Peek、主动丢弃、
+停止后的 Clear/ResetStatistics 维护，以及统计采样。
 
 ## 项目结构
 
 ```text
 SpscRingBuffer/
 ├─ SpscRingBuffer.slnx
-├─ SpscRingBuffer/                  .NET 10 类库
+├─ SpscRingBuffer/                        .NET 10 类库
 │  ├─ SpscRingBuffer.cs
 │  ├─ RingBufferStatistics.cs
 │  └─ SpscRingBuffer.csproj
-├─ SpscRingBuffer.Tests/            .NET 10 控制台测试程序
+├─ SpscRingBuffer.Tests/                  .NET 10 控制台测试程序
 │  ├─ Program.cs
 │  ├─ TestRunner.cs
 │  ├─ BufferTests.cs
@@ -24,14 +25,16 @@ SpscRingBuffer/
 │  ├─ MaintenanceTests.cs
 │  └─ SpscRingBuffer.Tests.csproj
 ├─ docs/
-│  ├─ ROADMAP.MD                 开发路线、设计演进与验证状态
-│  ├─ 复核探针/                   独立诊断，不加入解决方案
-│  └─ 性能对照/                   修复前快照与当前版本的本机对照
+│  └─ ROADMAP.MD                         开发路线、设计演进与验证状态
+├─ .gitattributes                        文本属性与统一行尾
+├─ .gitignore                            忽略 bin、obj、.vs 等生成物
+├─ AGENTS.md                             本目录的代码与验证约定
 └─ readme.md
 ```
 
-两个项目均使用稳定 C# 14、`net10.0`，启用可空引用检查。解决方案沿用基础设施中计时器的 `.slnx` 格式。
-安装 .NET 10 SDK 后，可在支持 .NET 10 的 Windows/Linux 环境构建；当前验证平台见 [ROADMAP 的验证状态](docs/ROADMAP.MD#validation)。
+两个项目均面向 `net10.0`，使用稳定 C# 14（`LangVersion` 14.0），启用可空引用检查和隐式 using；类库生成 XML API 文档。
+仓库中只有 `SpscRingBuffer.slnx` 一个解决方案，包含上述两个项目。安装 .NET 10 SDK 后，可在支持 .NET 10 的 Windows/Linux 环境构建；
+目前完成验证的是 Windows X64/X86，Linux 和 ARM64 尚未验证，详见 [ROADMAP 的验证状态](docs/ROADMAP.MD#validation)。
 
 ## 构建和测试
 
@@ -128,9 +131,10 @@ int read = ring.TryRead(destination.AsSpan());
 对同一后缀不断重试会重复增加此计数。唯一缺样应结合设备序号、适配层统计和业务确认判断。
 `TotalRead` 仅表示交付给消费者，不证明下游计算或存储成功。
 `HighWatermark` 是保守估计，并发时可能高估占用。
+`RingBufferStatistics` 的 `Usage` 和 `PeakUsage` 分别由 `Count/Capacity` 与 `HighWatermark/Capacity` 派生，范围 0 到 1，同样是近似值。
 
 各 long 统计字段在 x86/x64 均原子读写，不会拼出半旧半新的单字段数值；多字段仍非一致快照。
-监控建议一次调用 `TryGetStatistics`，仅在成功时从返回值的 `FreeCount/IsEmpty/IsFull/Usage` 派生显示。
+监控建议一次调用 `TryGetStatistics`，仅在成功时从返回值的 `FreeCount/IsEmpty/IsFull/Usage/PeakUsage` 派生显示。
 在计数未溢出、没有并发维护时，`TotalRead + TotalDiscarded <= InitialCount + TotalWritten`；
 不能据此把 `Count` 当作同一时刻的精确积压。计数器采用 unchecked 累计，长期监控须处理回绕。
 
@@ -176,7 +180,7 @@ Clear 和 ResetStatistics 在修改数据、累计统计与 Generation 前检查
 重试还须检查取消/结束状态；生产结束后不足一个精确读取批次的尾部，应使用 `TryRead(Span<T>)` 排空。
 不要用 Count 预判后再当作读写许可。相关回退示例由 `RegressionTests.BatchProgressAndExpiry` 验证。
 
-## 本轮 API 迁移
+## 相对原实现的 API 变更
 
 - 原 `TryWrite(ReadOnlySpan<T>)` 已移除，批量调用统一改为 `TryWriteBatch`；移除重载才可消除 null/default 的歧义。
   **尤其检查 T 为 object 或其他能接收数组的类型：旧的 `TryWrite(array)` 现在是单点写数组对象，可能仍能编译。**
